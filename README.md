@@ -1,10 +1,8 @@
-# 🚨 Incident Management Command Center (IMC)
+#  Incident Management Command Center (IMC)
 
 > A production-grade, real-time Site Reliability Engineering (SRE) platform built with a polyglot persistence strategy, event-driven architecture, and enterprise design patterns.
 
-![Dashboard Preview](./docs/assets/dashboard.png)
-
-## 🏗️ System Architecture
+##  System Architecture
 
 ```
                           ┌─────────────────────────────────────────────────┐
@@ -63,6 +61,7 @@
 | Non-blocking Alerts | `setImmediate()` async dispatch | Fire-and-Forget |
 | Real-Time UI Updates | Server-Sent Events (SSE) + Redis Pub/Sub | Push Architecture |
 | MTTR Analytics | SQL `EXTRACT(EPOCH …)` aggregation | Time-Series Analytics |
+| AI Incident Resolution | Postgres `pg_trgm` | RAG (Retrieval-Augmented Gen) |
 
 ---
 
@@ -141,10 +140,11 @@ Built with **Next.js 15 App Router** using glassmorphic dark-mode design.
 | **Stats Bar** | Total / Active / Closed incidents + Avg MTTR, all live-updating |
 | **Incident Grid** | Cards color-coded by severity (P0 → P3) with pulsing P0 animation |
 | **Distributed Trace Map** | Visual node graph showing upstream service blast radius |
+| **AI Copilot (RAG)** | Instantly surfaces historical fixes from similar past incidents |
 | **Lifecycle Action Bar** | One-click state transitions enforced by the backend State Machine |
 | **RCA Form** | Inline Root Cause Analysis submission — required before incident closure |
 | **Raw Telemetry Pane** | Full MongoDB signal payloads rendered as a log stream |
-| **Chaos Simulation Button** | Fires 100 concurrent signals with one click to stress-test the pipeline |
+| **Chaos Simulation Button** | Fires randomized concurrent signals to stress-test the pipeline |
 
 ---
 
@@ -235,6 +235,7 @@ CREATE TABLE rca_records (
 | `POST` | `/api/v1/signals` | Ingest a raw telemetry signal |
 | `GET` | `/api/v1/incidents` | List all work items from PostgreSQL |
 | `GET` | `/api/v1/incidents/:id/signals` | Fetch raw MongoDB logs for an incident |
+| `GET` | `/api/v1/incidents/:id/similar` | **RAG:** Search historical RCA records using trigram similarity |
 | `POST` | `/api/v1/incidents/:id/state` | Trigger a state machine transition |
 | `POST` | `/api/v1/incidents/:id/rca` | Submit a Root Cause Analysis record |
 | `GET` | `/api/v1/analytics/mttr` | Get MTTR analytics aggregation |
@@ -249,6 +250,7 @@ Backend      Node.js 18, Express.js
 Frontend     Next.js 15 (App Router), React 18
 Databases    PostgreSQL 15, MongoDB 6, Redis 7
 Messaging    Redis Streams (queue), Redis Pub/Sub (real-time events)
+AI Search    PostgreSQL pg_trgm (mocking vector similarity)
 Containers   Docker, Docker Compose
 Chaos Test   Python 3, concurrent.futures
 ```
@@ -257,6 +259,7 @@ Chaos Test   Python 3, concurrent.futures
 
 ## 🏛️ Design Patterns Used
 
+- **RAG (Retrieval-Augmented Generation)** — Uses Postgres `pg_trgm` text similarity to query past RCA records and suggest fixes for active incidents based on component signatures.
 - **State Pattern** — `OpenState`, `InvestigatingState`, `ResolvedState`, `ClosedState` classes with strict transition enforcement and transactional RCA validation.
 - **Strategy Pattern** — `AlertStrategy` interface with `P0DatabaseStrategy` (PagerDuty sim) and `P2CacheStrategy` (Slack sim) concrete implementations routed via `AlertFactory`.
 - **Circuit Breaker** — Redis `SET NX` debouncing prevents duplicate incident creation during alert storms.
