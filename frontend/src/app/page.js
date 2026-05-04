@@ -94,17 +94,13 @@ export default function Dashboard() {
 
   // MTTR Analytics State
   const [mttr, setMttr] = useState({ closed_count: 0, avg_mttr_seconds: 0 });
+  const [droppedSignals, setDroppedSignals] = useState(0);
 
   const runSimulation = async () => {
     if (isSimulating) return;
     setIsSimulating(true);
     try {
       await fetch('/api/simulate', { method: 'POST' });
-      // Give the background worker 1.5s to batch process 100 signals before refreshing UI
-      setTimeout(() => {
-        fetchIncidents();
-        fetchMttr();
-      }, 1500); 
     } catch (err) {
       console.error(err);
     } finally {
@@ -118,11 +114,14 @@ export default function Dashboard() {
       if (res.ok) {
         const data = await res.json();
         setIncidents(data);
-        // Update selected incident if its status changed
-        if (selectedIncident) {
-          const updated = data.find(i => i.id === selectedIncident.id);
-          if (updated) setSelectedIncident(updated);
-        }
+        // Update selected incident if its status changed (using functional update to avoid stale closures)
+        setSelectedIncident(prev => {
+          if (prev) {
+            const updated = data.find(i => i.id === prev.id);
+            return updated || prev;
+          }
+          return prev;
+        });
       }
     } catch (err) {
       console.error("Failed to fetch incidents", err);
@@ -144,14 +143,25 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // Initial fetch
     fetchIncidents();
     fetchMttr();
-    const interval = setInterval(() => {
+
+    // SSE connection for Real-Time Streaming (Replaces 5s polling)
+    const sse = new EventSource('/api/stream');
+    
+    sse.addEventListener('refresh', () => {
       fetchIncidents();
       fetchMttr();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [selectedIncident]);
+    });
+
+    sse.addEventListener('debounce', (e) => {
+      const data = JSON.parse(e.data);
+      setDroppedSignals(data.count || 0);
+    });
+
+    return () => sse.close();
+  }, []); // Run only once on mount
 
   const openIncident = async (incident) => {
     setSelectedIncident(incident);
@@ -285,6 +295,13 @@ export default function Dashboard() {
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>RESOLVED</span>
                 <span className="monospace" style={{ fontSize: '1.2rem', color: 'var(--accent-blue)', fontWeight: 600 }}>
                   {mttr.closed_count}
+                </span>
+              </div>
+
+              <div className="glass-panel" style={{ padding: '0.5rem 1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>DEBOUNCED</span>
+                <span className="monospace" style={{ fontSize: '1.2rem', color: '#f59e0b', fontWeight: 600 }}>
+                  {droppedSignals}
                 </span>
               </div>
 

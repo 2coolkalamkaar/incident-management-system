@@ -51,6 +51,10 @@ async function processIncomingSignal(redisClient, pgPool, mongoCollection, signa
         activeWorkItemId = existingUuid;
       }
       
+      // Debouncer Metric Tracking
+      await redisClient.incr('metrics:signals_dropped');
+      redisClient.publish('system_updates', JSON.stringify({ type: 'DEBOUNCE_INCREMENT' })).catch(e=>e);
+      
       console.log(`[Debounced] Routing signal to existing Work Item ${activeWorkItemId} for component ${component_id}`);
     }
 

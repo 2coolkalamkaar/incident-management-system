@@ -166,6 +166,7 @@ async function processBatch(redisClient, pgPool, mongoCollection, streamData) {
     if (messageIds.length > 0) {
       await redisClient.xack(STREAM_NAME, GROUP_NAME, ...messageIds);
       console.log(`[Worker] ✅ Successfully processed, inserted, and ACKed batch of ${messageIds.length} messages.`);
+      redisClient.publish('system_updates', JSON.stringify({ type: 'REFRESH_INCIDENTS' })).catch(err => console.error(err));
     }
 
   } catch (error) {

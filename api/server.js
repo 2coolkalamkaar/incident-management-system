@@ -171,6 +171,51 @@ app.get('/api/v1/analytics/mttr', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/v1/stream
+ * Server-Sent Events (SSE) for Real-Time UI updates.
+ */
+app.get('/api/v1/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*'
+  });
+
+  // Create a dedicated redis subscriber for this client
+  const subscriber = new Redis(process.env.REDIS_URL);
+  
+  subscriber.subscribe('system_updates', (err) => {
+    if (err) console.error("Failed to subscribe", err);
+  });
+
+  subscriber.on('message', async (channel, message) => {
+    const data = JSON.parse(message);
+    if (data.type === 'REFRESH_INCIDENTS') {
+      res.write(`event: refresh\ndata: {}\n\n`);
+    } else if (data.type === 'DEBOUNCE_INCREMENT') {
+      const count = await redisClient.get('metrics:signals_dropped');
+      res.write(`event: debounce\ndata: ${JSON.stringify({ count })}\n\n`);
+    }
+  });
+
+  // Send initial metrics on connection
+  redisClient.get('metrics:signals_dropped').then(count => {
+    res.write(`event: debounce\ndata: ${JSON.stringify({ count: count || 0 })}\n\n`);
+  });
+
+  // Keep-alive heartbeat
+  const interval = setInterval(() => {
+    res.write(`:\n\n`);
+  }, 15000);
+
+  req.on('close', () => {
+    clearInterval(interval);
+    subscriber.quit();
+  });
+});
+
 // ==========================================
 // START SERVER
 // ==========================================
