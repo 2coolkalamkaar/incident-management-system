@@ -2,30 +2,32 @@ import requests
 import concurrent.futures
 import time
 import json
+import random
 
 API_URL = "http://localhost:3000/api/v1/signals"
 
-# Scenario 1: Massive DB Outage (Tests Debouncing)
-db_outage_payload = {
-    "component_id": "RDBMS_MAIN_01",
-    "severity_hint": "P0",
-    "payload": {
-        "error_code": "CONNECTION_REFUSED",
-        "latency_ms": 5000,
-        "message": "Failed to acquire connection from pool"
+components = [
+    {
+        "component_id": "RDBMS_MAIN_01",
+        "severity_hint": "P0",
+        "payload": { "error_code": "CONNECTION_REFUSED", "latency_ms": 5000, "message": "Failed to acquire connection from pool" }
+    },
+    {
+        "component_id": "MCP_HOST_EAST",
+        "severity_hint": "P1",
+        "payload": { "error_code": "PROCESS_CRASH", "memory_usage": "99%", "message": "OOM Killer triggered on MCP host" }
+    },
+    {
+        "component_id": "API_GATEWAY_EU_02",
+        "severity_hint": "P1",
+        "payload": { "error_code": "502_BAD_GATEWAY", "throughput": "0 req/sec", "message": "Upstream service timeout" }
+    },
+    {
+        "component_id": "STRIPE_WEBHOOK_WORKER",
+        "severity_hint": "P1",
+        "payload": { "error_code": "DLQ_FULL", "message": "Failed to process payment webhooks" }
     }
-}
-
-# Scenario 2: Downstream MCP Failure (Tests distinct routing/alerting)
-mcp_failure_payload = {
-    "component_id": "MCP_HOST_EAST",
-    "severity_hint": "P1",
-    "payload": {
-        "error_code": "PROCESS_CRASH",
-        "memory_usage": "99%",
-        "message": "OOM Killer triggered on MCP host"
-    }
-}
+]
 
 def send_signal(payload):
     try:
@@ -64,15 +66,15 @@ def blast_api(payload, num_requests=100, label=""):
 if __name__ == "__main__":
     print("--- IMS Chaos Testing Script ---")
     
-    # 1. Simulate the Database Crash (100 signals instantly)
-    blast_api(db_outage_payload, num_requests=100, label="RDBMS Outage Simulation")
+    # Pick 2-3 random components to fail
+    num_to_fail = random.randint(2, 3)
+    failing_components = random.sample(components, num_to_fail)
     
-    # Brief pause to let the queue process
-    time.sleep(2)
-    
-    # 2. Simulate the cascading MCP failure (50 signals)
-    blast_api(mcp_failure_payload, num_requests=50, label="MCP Cascading Failure Simulation")
+    for comp in failing_components:
+        label = f"{comp['component_id']} Cascading Failure Simulation"
+        blast_api(comp, num_requests=50, label=label)
+        time.sleep(1)
     
     print("\n💡 Verification Step:")
-    print("Check your database. You should have exactly TWO Work Items in PostgreSQL.")
-    print("You should have ~150 raw signal documents in MongoDB linked to those two Work Items.")
+    print(f"Check your database. You should have exactly {num_to_fail} Work Items in PostgreSQL.")
+    print(f"You should have ~{num_to_fail * 50} raw signal documents in MongoDB linked to those Work Items.")

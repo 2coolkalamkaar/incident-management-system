@@ -1,7 +1,69 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import './globals.css';
+
+const RealtimeGraph = ({ history, currentRate, totalDropped }) => {
+  const maxVal = Math.max(...history, 100);
+  const width = 240;
+  const height = 50;
+  
+  let stepPoints = '';
+  for(let i=0; i<history.length-1; i++) {
+    const x1 = (i / (history.length - 1)) * width;
+    const x2 = ((i+1) / (history.length - 1)) * width;
+    const y1 = height - (history[i] / maxVal) * height;
+    const y2 = height - (history[i+1] / maxVal) * height;
+    stepPoints += `${x1},${y1} ${x2},${y1} `;
+    if (i === history.length - 2) {
+      stepPoints += `${x2},${y2}`;
+    }
+  }
+  if (!stepPoints) stepPoints = `0,${height} ${width},${height}`;
+
+  return (
+    <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', padding: '1rem 1.5rem', minWidth: '300px' }}>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px', marginBottom: '0.5rem' }}>
+        REAL-TIME CONCURRENCY (TOTAL SIGNALS)
+      </div>
+      
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+          <span className="monospace" style={{ fontSize: '2.5rem', color: '#fff', fontWeight: 800, lineHeight: '1' }}>{currentRate}</span>
+          <span className="monospace" style={{ fontSize: '1rem', color: 'var(--text-muted)' }}>/sec</span>
+        </div>
+        
+        <div style={{ display: 'flex', gap: '1rem' }}>
+          <div style={{ padding: '0.25rem 0.5rem', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px' }}>
+            <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>PEAK DEBOUNCED</div>
+            <div className="monospace" style={{ fontSize: '0.85rem', color: '#f59e0b' }}>{totalDropped.toLocaleString()}</div>
+          </div>
+        </div>
+      </div>
+      
+      <div style={{ position: 'relative', width: '100%', height: `${height}px` }}>
+        <svg width="100%" height="100%" preserveAspectRatio="none" viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+          <defs>
+            <linearGradient id="stepGradient" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="rgba(16, 185, 129, 0.3)" />
+              <stop offset="100%" stopColor="rgba(16, 185, 129, 0)" />
+            </linearGradient>
+          </defs>
+          <polygon 
+            points={`0,${height} ${stepPoints} ${width},${height}`} 
+            fill="url(#stepGradient)" 
+          />
+          <polyline 
+            points={stepPoints} 
+            fill="none" 
+            stroke="#10b981" 
+            strokeWidth="2" 
+          />
+        </svg>
+      </div>
+    </div>
+  );
+};
 
 const DependencyMap = ({ targetComponent }) => {
   let nodes = [];
@@ -86,6 +148,8 @@ export default function Dashboard() {
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [signals, setSignals] = useState([]);
   const [loadingSignals, setLoadingSignals] = useState(false);
+  const [similarIncidents, setSimilarIncidents] = useState([]);
+  const [loadingSimilar, setLoadingSimilar] = useState(false);
 
   // RCA Form State
   const [rcaForm, setRcaForm] = useState({ root_cause_category: '', fix_applied: '', prevention_steps: '' });
@@ -95,6 +159,32 @@ export default function Dashboard() {
   // MTTR Analytics State
   const [mttr, setMttr] = useState({ closed_count: 0, avg_mttr_seconds: 0 });
   const [droppedSignals, setDroppedSignals] = useState(0);
+  const [signalHistory, setSignalHistory] = useState(Array(30).fill(0));
+  const [currentRate, setCurrentRate] = useState(0);
+  
+  const prevDroppedRef = useRef(0);
+  const latestDroppedRef = useRef(0);
+
+  useEffect(() => {
+    latestDroppedRef.current = droppedSignals;
+  }, [droppedSignals]);
+
+  useEffect(() => {
+    // Tick every 1 second to calculate rate and shift history array
+    const interval = setInterval(() => {
+      const currentTotal = latestDroppedRef.current;
+      const rate = currentTotal - prevDroppedRef.current;
+      prevDroppedRef.current = currentTotal;
+      
+      setCurrentRate(rate);
+      setSignalHistory(prev => {
+        const next = [...prev.slice(1), rate];
+        return next;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const runSimulation = async () => {
     if (isSimulating) return;
@@ -167,17 +257,27 @@ export default function Dashboard() {
     setSelectedIncident(incident);
     setLoadingSignals(true);
     setSignals([]);
+    setSimilarIncidents([]);
+    setLoadingSimilar(true);
     setRcaStatus({ message: '', error: false });
+    
     try {
       const res = await fetch(`/api/incidents/${incident.id}/signals`);
       if (res.ok) {
         const data = await res.json();
         setSignals(data);
       }
+      
+      const simRes = await fetch(`/api/incidents/${incident.id}/similar`);
+      if (simRes.ok) {
+        const simData = await simRes.json();
+        setSimilarIncidents(simData);
+      }
     } catch (err) {
-      console.error("Failed to fetch signals", err);
+      console.error("Failed to fetch incident details", err);
     } finally {
       setLoadingSignals(false);
+      setLoadingSimilar(false);
     }
   };
 
@@ -283,27 +383,38 @@ export default function Dashboard() {
           {!selectedIncident && (
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
               
-              {/* Analytics Badges */}
-              <div className="glass-panel" style={{ padding: '0.5rem 1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>AVG MTTR</span>
-                <span className="monospace" style={{ fontSize: '1.2rem', color: 'var(--accent-purple)', fontWeight: 600 }}>
-                  {formatMttr(mttr.avg_mttr_seconds)}
-                </span>
+              {/* Incident Stats Bar */}
+              <div className="glass-panel" style={{ padding: '0.5rem 1.25rem', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>TOTAL INCIDENTS</span>
+                  <span className="monospace" style={{ fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>{incidents.length}</span>
+                </div>
+                <div style={{ width: '1px', height: '25px', background: 'var(--border-color)' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>ACTIVE</span>
+                  <span className="monospace" style={{ fontSize: '1.2rem', color: 'var(--status-open)', fontWeight: 600 }}>
+                    {incidents.filter(i => i.status === 'OPEN' || i.status === 'INVESTIGATING').length}
+                  </span>
+                </div>
+                <div style={{ width: '1px', height: '25px', background: 'var(--border-color)' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>CLOSED</span>
+                  <span className="monospace" style={{ fontSize: '1.2rem', color: 'var(--status-closed)', fontWeight: 600 }}>{mttr.closed_count}</span>
+                </div>
+                <div style={{ width: '1px', height: '25px', background: 'var(--border-color)' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>AVG MTTR</span>
+                  <span className="monospace" style={{ fontSize: '1.2rem', color: 'var(--accent-purple)', fontWeight: 600 }}>
+                    {formatMttr(mttr.avg_mttr_seconds)}
+                  </span>
+                </div>
               </div>
 
-              <div className="glass-panel" style={{ padding: '0.5rem 1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>RESOLVED</span>
-                <span className="monospace" style={{ fontSize: '1.2rem', color: 'var(--accent-blue)', fontWeight: 600 }}>
-                  {mttr.closed_count}
-                </span>
-              </div>
-
-              <div className="glass-panel" style={{ padding: '0.5rem 1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>DEBOUNCED</span>
-                <span className="monospace" style={{ fontSize: '1.2rem', color: '#f59e0b', fontWeight: 600 }}>
-                  {droppedSignals}
-                </span>
-              </div>
+              <RealtimeGraph 
+                history={signalHistory} 
+                currentRate={currentRate} 
+                totalDropped={droppedSignals} 
+              />
 
               <button 
                 onClick={runSimulation}
@@ -474,6 +585,31 @@ export default function Dashboard() {
 
           {/* Distributed Trace Dependency Map */}
           <DependencyMap targetComponent={selectedIncident.component_id} />
+
+          {/* AI RAG Resolution */}
+          {similarIncidents.length > 0 && (
+            <div style={{ marginBottom: '2rem', padding: '1.5rem', background: 'rgba(59, 130, 246, 0.1)', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+              <h4 style={{ color: '#60a5fa', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '1.2rem' }}>🧠</span> AI Incident Resolution (RAG)
+              </h4>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+                Retrieval-Augmented Generation searched {mttr.closed_count} past closed incidents and found similar historical signatures.
+              </p>
+              
+              {similarIncidents.map((sim, i) => (
+                <div key={i} style={{ marginBottom: i < similarIncidents.length - 1 ? '1rem' : 0, padding: '1rem', background: 'rgba(0,0,0,0.3)', borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span style={{ color: '#93c5fd', fontSize: '0.85rem', fontWeight: 600 }}>{sim.component_id}</span>
+                    <span style={{ color: '#10b981', fontSize: '0.85rem', fontWeight: 800 }}>{sim.sim_score}% Match</span>
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: '1.4' }}>
+                    <div style={{ marginBottom: '0.25rem' }}><strong>Category:</strong> {sim.root_cause_category}</div>
+                    <div><strong>Fix Applied:</strong> <span className="monospace" style={{ color: 'var(--text-muted)' }}>{sim.fix_applied}</span></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* RCA Form */}
           {selectedIncident.status !== 'CLOSED' && (

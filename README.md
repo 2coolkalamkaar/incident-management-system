@@ -1,1 +1,309 @@
-# incident-management-system
+# 🚨 Incident Management Command Center (IMC)
+
+> A production-grade, real-time Site Reliability Engineering (SRE) platform built with a polyglot persistence strategy, event-driven architecture, and enterprise design patterns.
+
+![Dashboard Preview](./docs/assets/dashboard.png)
+
+## 🏗️ System Architecture
+
+```
+                          ┌─────────────────────────────────────────────────┐
+                          │              Next.js Frontend (Port 3001)        │
+                          │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
+                          │  │ Live     │  │ Realtime │  │  Incident    │  │
+                          │  │ Graph    │  │ SSE Feed │  │  Detail Pane │  │
+                          │  └──────────┘  └──────────┘  └──────────────┘  │
+                          └────────────────────┬────────────────────────────┘
+                                               │ HTTP / SSE (Proxy)
+                                               ▼
+                          ┌─────────────────────────────────────────────────┐
+                          │              Express API (Port 3000)             │
+                          │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
+                          │  │ Ingestion│  │ SSE /    │  │  State       │  │
+                          │  │ + Debounce│  │ Pub/Sub  │  │  Machine     │  │
+                          │  └──────────┘  └──────────┘  └──────────────┘  │
+                          └──────┬──────────────┬──────────────────────────┘
+                                 │              │ Pub/Sub
+                    ┌────────────▼──┐    ┌──────▼───────┐
+                    │  Redis 7      │    │  Redis 7     │
+                    │  Streams      │    │  Pub/Sub     │
+                    │  (Queue)      │    │  Channel     │
+                    └────────────┬──┘    └──────────────┘
+                                 │
+                    ┌────────────▼──────────────────────┐
+                    │      Async Batch Worker (Node.js)   │
+                    │  • Consumes in batches of 500      │
+                    │  • Exponential Backoff Retry       │
+                    │  • DLQ on ultimate failure         │
+                    └─────────┬─────────────┬───────────┘
+                              │             │
+               ┌──────────────▼──┐   ┌──────▼──────────────┐
+               │  PostgreSQL 15   │   │  MongoDB 6           │
+               │  (Work Items,    │   │  (Raw Signals /      │
+               │   RCA Records,   │   │   Data Lake)         │
+               │   State Machine) │   └─────────────────────┘
+               └─────────────────┘
+```
+
+---
+
+## ✨ Key Features
+
+### 🔥 Core Engineering Highlights
+
+| Feature | Technology | Design Pattern |
+|---|---|---|
+| Signal Ingestion & Debouncing | Redis `SET NX` + TTL | Circuit Breaker |
+| Async Signal Queuing | Redis Streams | Producer / Consumer |
+| Bulk DB Writes | MongoDB `insertMany` + PG `ON CONFLICT` | Idempotency |
+| Failure Retry | Exponential Backoff (100ms, 200ms, 400ms…) | Retry Pattern |
+| Unrecoverable Failures | Redis Stream DLQ | Dead Letter Queue |
+| Incident Lifecycle | Class-based State Machine | State Design Pattern |
+| Alert Routing | P0 (PagerDuty sim) / P2 (Slack sim) | Strategy Design Pattern |
+| Non-blocking Alerts | `setImmediate()` async dispatch | Fire-and-Forget |
+| Real-Time UI Updates | Server-Sent Events (SSE) + Redis Pub/Sub | Push Architecture |
+| MTTR Analytics | SQL `EXTRACT(EPOCH …)` aggregation | Time-Series Analytics |
+
+---
+
+### 🎯 Incident Lifecycle (State Machine)
+
+Strict transition rules are enforced server-side:
+
+```
+OPEN ──► INVESTIGATING ──► RESOLVED ──► CLOSED
+  │                             │
+  └──── ❌ Direct skip forbidden │
+                                │
+                                └──► Requires RCA record in DB (transactional check)
+                                     Triggers async MTTR calculation on success
+```
+
+**Business Rule:** A `RESOLVED` → `CLOSED` transition opens a **database transaction**, queries the `rca_records` table, aborts with `HTTP 400` if no RCA exists, and only commits on valid RCA presence. This prevents incidents from being silently swept under the rug.
+
+---
+
+### ⚡ Signal Ingestion & Debouncing
+
+The ingestion pipeline is designed to survive a **DDoS-scale alert storm**:
+
+1. A signal arrives at `POST /api/v1/signals`.
+2. A `SET NX` Redis lock is attempted with a **10-second TTL** per `component_id`.
+3. **If lock acquired (first occurrence):** A `work_item` is created in PostgreSQL and the signal is queued to the Redis Stream.
+4. **If lock exists (duplicate during storm):** Only the raw signal is queued. No new Postgres row. The `metrics:signals_dropped` counter is incremented and pushed to the SSE bus in real-time.
+
+This means **100 concurrent failures from the same component produce exactly 1 incident ticket** — saving thousands of unnecessary database writes.
+
+---
+
+### 🔄 Async Batch Worker
+
+The worker runs as a **separate containerized process**, consuming from the Redis Stream:
+
+```
+Read Batch (up to 500 messages)
+       │
+       ├─► Parse: separate MongoDB signals vs Postgres work_items
+       │
+       ├─► Step 1: MongoDB bulkInsert (ordered: false for resilience)
+       │
+       ├─► Step 2: Postgres bulk upsert (ON CONFLICT DO NOTHING → idempotent)
+       │
+       ├─► Success? → ACK all messages + publish REFRESH_INCIDENTS to Pub/Sub
+       │
+       └─► Failure? → Exponential Backoff (x3) → Route to DLQ → ACK originals
+```
+
+Throughput is logged per-batch. The DLQ prevents a single bad batch from blocking the entire stream.
+
+---
+
+### 📡 Real-Time Streaming (SSE + Redis Pub/Sub)
+
+The UI **never polls**. Instead:
+
+1. Browser opens a persistent `EventSource` connection to `/api/stream`.
+2. The Next.js proxy passes it through to Express.
+3. Express creates a **dedicated Redis subscriber** per client.
+4. When the Batch Worker finishes a write, it publishes to `system_updates`.
+5. Express pushes an `event: refresh` packet down the open connection.
+6. The React frontend updates the incident grid and stat counters **instantly**, with zero re-renders triggered by timers.
+
+---
+
+## 🖥️ Frontend Dashboard
+
+Built with **Next.js 15 App Router** using glassmorphic dark-mode design.
+
+| Component | Description |
+|---|---|
+| **Real-Time Concurrency Graph** | Live SVG step-chart showing debounced signals/sec |
+| **Stats Bar** | Total / Active / Closed incidents + Avg MTTR, all live-updating |
+| **Incident Grid** | Cards color-coded by severity (P0 → P3) with pulsing P0 animation |
+| **Distributed Trace Map** | Visual node graph showing upstream service blast radius |
+| **Lifecycle Action Bar** | One-click state transitions enforced by the backend State Machine |
+| **RCA Form** | Inline Root Cause Analysis submission — required before incident closure |
+| **Raw Telemetry Pane** | Full MongoDB signal payloads rendered as a log stream |
+| **Chaos Simulation Button** | Fires 100 concurrent signals with one click to stress-test the pipeline |
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+- Docker & Docker Compose
+- Python 3 (for chaos testing)
+
+### 1. Start the entire stack
+
+```bash
+git clone <your-repo-url>
+cd IMC
+docker-compose up --build -d
+```
+
+All 6 services will start with health-check dependencies:
+- `imc-postgres` → PostgreSQL 15
+- `imc-mongodb` → MongoDB 6
+- `imc-redis` → Redis 7
+- `imc-api` → Express API (`:3000`)
+- `imc-worker` → Async Batch Worker
+- `imc-frontend` → Next.js Dashboard (`:3001`)
+
+### 2. Open the Dashboard
+
+```
+http://localhost:3001
+```
+
+### 3. Run the Chaos Simulation
+
+Either click **🔥 RUN CHAOS SIMULATION** in the UI, or run the Python script directly:
+
+```bash
+pip3 install requests
+python3 mock.py
+```
+
+This fires **150 concurrent HTTP requests** (100 RDBMS failures + 50 MCP failures) to stress-test the debouncing pipeline. You should see exactly **2 work items** created in PostgreSQL and ~150 raw signals stored in MongoDB.
+
+---
+
+## 🗄️ Database Schema
+
+### PostgreSQL — `work_items`
+```sql
+CREATE TABLE work_items (
+  id           UUID PRIMARY KEY,
+  component_id VARCHAR(255) NOT NULL,
+  severity     VARCHAR(10)  NOT NULL,   -- P0, P1, P2, P3
+  status       VARCHAR(20)  NOT NULL DEFAULT 'OPEN',
+  created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+```
+
+### PostgreSQL — `rca_records`
+```sql
+CREATE TABLE rca_records (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  work_item_id        UUID REFERENCES work_items(id),
+  root_cause_category VARCHAR(255),
+  fix_applied         TEXT,
+  prevention_steps    TEXT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+### MongoDB — `raw_signals`
+```json
+{
+  "work_item_id":   "UUID",
+  "component_id":   "RDBMS_NODE_42",
+  "severity_hint":  "P0",
+  "timestamp":      "ISODate",
+  "payload":        { "error_code": "CONNECTION_REFUSED", "latency_ms": 5000 }
+}
+```
+
+---
+
+## 📡 API Reference
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/signals` | Ingest a raw telemetry signal |
+| `GET` | `/api/v1/incidents` | List all work items from PostgreSQL |
+| `GET` | `/api/v1/incidents/:id/signals` | Fetch raw MongoDB logs for an incident |
+| `POST` | `/api/v1/incidents/:id/state` | Trigger a state machine transition |
+| `POST` | `/api/v1/incidents/:id/rca` | Submit a Root Cause Analysis record |
+| `GET` | `/api/v1/analytics/mttr` | Get MTTR analytics aggregation |
+| `GET` | `/api/v1/stream` | SSE endpoint for real-time UI push events |
+
+---
+
+## 🧰 Tech Stack
+
+```
+Backend      Node.js 18, Express.js
+Frontend     Next.js 15 (App Router), React 18
+Databases    PostgreSQL 15, MongoDB 6, Redis 7
+Messaging    Redis Streams (queue), Redis Pub/Sub (real-time events)
+Containers   Docker, Docker Compose
+Chaos Test   Python 3, concurrent.futures
+```
+
+---
+
+## 🏛️ Design Patterns Used
+
+- **State Pattern** — `OpenState`, `InvestigatingState`, `ResolvedState`, `ClosedState` classes with strict transition enforcement and transactional RCA validation.
+- **Strategy Pattern** — `AlertStrategy` interface with `P0DatabaseStrategy` (PagerDuty sim) and `P2CacheStrategy` (Slack sim) concrete implementations routed via `AlertFactory`.
+- **Circuit Breaker** — Redis `SET NX` debouncing prevents duplicate incident creation during alert storms.
+- **Idempotency** — `ON CONFLICT DO NOTHING` in PostgreSQL and `ordered: false` in MongoDB ensure safe re-processing.
+- **Dead Letter Queue** — Failed batches are routed to `incident_signals_dlq` after 3 exponential backoff retries.
+- **BFF (Backend For Frontend)** — Next.js API routes act as a proxy layer, solving internal Docker DNS resolution and eliminating CORS issues.
+- **Push Architecture** — Redis Pub/Sub + Server-Sent Events replaces polling for sub-second UI latency.
+
+---
+
+## 📁 Project Structure
+
+```
+IMC/
+├── api/
+│   ├── server.js          # Express API, routes, SSE endpoint
+│   ├── ingestion.js       # Signal ingestion + Redis debounce logic
+│   ├── batchWorker.js     # Async consumer: batching, retry, DLQ
+│   ├── stateMachine.js    # State pattern: lifecycle + RCA transaction
+│   └── alertStrategy.js   # Strategy pattern: P0/P2 alert routing
+├── frontend/
+│   └── src/app/
+│       ├── page.js        # Main dashboard with real-time graph
+│       └── api/           # Next.js proxy routes (BFF layer)
+│           ├── incidents/
+│           ├── analytics/
+│           ├── simulate/
+│           └── stream/
+├── db/postgres/
+│   └── schema.sql         # PostgreSQL schema definitions
+├── mock.py                # Chaos Engineering test script
+└── docker-compose.yml     # Full 6-service orchestration
+```
+
+---
+
+## 🎓 Key Engineering Decisions
+
+**Why Redis Streams over RabbitMQ?**
+Redis was already in the stack as the debounce store. Streams give us Consumer Groups, message acknowledgement, and replay — all without adding a new service dependency.
+
+**Why Polyglot Persistence (Postgres + MongoDB)?**
+Work items have a structured, relational lifecycle (states, foreign keys, ACID transactions). Raw signals are unstructured, high-volume, and schema-flexible — a perfect MongoDB use case. Using a single database would force compromises on both.
+
+**Why SSE over WebSockets?**
+SSE is unidirectional (server → client) and HTTP-native, which means it works through standard proxies and load balancers without additional infrastructure. For a read-heavy dashboard that only needs server push, SSE is simpler, more efficient, and more resilient than WebSockets.
+
+---
+
+*Built end-to-end as a demonstration of production-grade distributed systems design.*

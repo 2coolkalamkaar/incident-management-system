@@ -21,6 +21,7 @@ let mongoCollection;
 async function connectDatabases() {
   await mongoClient.connect();
   mongoCollection = mongoClient.db().collection('raw_signals');
+  await pgPool.query('CREATE EXTENSION IF NOT EXISTS pg_trgm;');
   console.log('[Server] 🔌 Successfully connected to PostgreSQL, MongoDB, and Redis.');
 }
 
@@ -146,6 +147,43 @@ app.get('/api/v1/incidents/:id/signals', async (req, res) => {
   } catch (error) {
     console.error('[Mongo Fetch Error]', error);
     res.status(500).json({ error: 'Failed to fetch signals' });
+  }
+});
+
+/**
+ * GET /api/v1/incidents/:id/similar
+ * Mocked RAG search using pg_trgm text similarity to find historical closed incidents.
+ */
+app.get('/api/v1/incidents/:id/similar', async (req, res) => {
+  const { id } = req.params;
+  try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    // First get the current incident's component
+    const current = await pgPool.query('SELECT component_id FROM work_items WHERE id = $1', [id]);
+    if (current.rows.length === 0) return res.status(404).json({ error: 'Incident not found' });
+    
+    const componentId = current.rows[0].component_id;
+
+    // Search for CLOSED incidents with similar component_id using trigram similarity
+    const query = `
+      SELECT 
+        w.id, w.component_id, w.severity, 
+        r.root_cause_category, r.fix_applied, r.prevention_steps,
+        ROUND(similarity(w.component_id, $1)::numeric * 100, 1) as sim_score
+      FROM work_items w
+      JOIN rca_records r ON w.id = r.work_item_id
+      WHERE w.status = 'CLOSED' 
+        AND w.id != $2
+        AND similarity(w.component_id, $1) > 0.1
+      ORDER BY sim_score DESC
+      LIMIT 3;
+    `;
+    const result = await pgPool.query(query, [componentId, id]);
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error('[Similarity Fetch Error]', error);
+    res.status(500).json({ error: 'Failed to calculate similarity' });
   }
 });
 
