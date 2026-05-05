@@ -52,9 +52,7 @@
 | Feature | Technology | Design Pattern |
 |---|---|---|
 | Signal Ingestion & Debouncing | Redis `SET NX` + TTL | Circuit Breaker |
-| Async Signal Queuing | Redis Streams | Producer / Consumer |
 | Bulk DB Writes | MongoDB `insertMany` + PG `ON CONFLICT` | Idempotency |
-| Failure Retry | Exponential Backoff (100ms, 200ms, 400ms…) | Retry Pattern |
 | Unrecoverable Failures | Redis Stream DLQ | Dead Letter Queue |
 | Incident Lifecycle | Class-based State Machine | State Design Pattern |
 | Alert Routing | P0 (PagerDuty sim) / P2 (Slack sim) | Strategy Design Pattern |
@@ -321,17 +319,3 @@ IMC/
 
 ---
 
-## 🎓 Key Engineering Decisions
-
-**Why Redis Streams over RabbitMQ?**
-Redis was already in the stack as the debounce store. Streams give us Consumer Groups, message acknowledgement, and replay — all without adding a new service dependency.
-
-**Why Polyglot Persistence (Postgres + MongoDB)?**
-Work items have a structured, relational lifecycle (states, foreign keys, ACID transactions). Raw signals are unstructured, high-volume, and schema-flexible — a perfect MongoDB use case. Using a single database would force compromises on both.
-
-**Why SSE over WebSockets?**
-SSE is unidirectional (server → client) and HTTP-native, which means it works through standard proxies and load balancers without additional infrastructure. For a read-heavy dashboard that only needs server push, SSE is simpler, more efficient, and more resilient than WebSockets.
-
----
-
-*Built end-to-end as a demonstration of production-grade distributed systems design.*
