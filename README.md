@@ -45,7 +45,7 @@
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 ### 🔥 Core Engineering Highlights
 
@@ -62,10 +62,11 @@
 | Real-Time UI Updates | Server-Sent Events (SSE) + Redis Pub/Sub | Push Architecture |
 | MTTR Analytics | SQL `EXTRACT(EPOCH …)` aggregation | Time-Series Analytics |
 | AI Incident Resolution | Postgres `pg_trgm` | RAG (Retrieval-Augmented Gen) |
+| LLM RCA Generation | Google Gemini 2.5 Pro | AI-Agent Analysis |
 
 ---
 
-### 🎯 Incident Lifecycle (State Machine)
+### Incident Lifecycle (State Machine)
 
 Strict transition rules are enforced server-side:
 
@@ -82,7 +83,7 @@ OPEN ──► INVESTIGATING ──► RESOLVED ──► CLOSED
 
 ---
 
-### ⚡ Signal Ingestion & Debouncing
+### Signal Ingestion & Debouncing
 
 The ingestion pipeline is designed to survive a **DDoS-scale alert storm**:
 
@@ -95,12 +96,12 @@ This means **100 concurrent failures from the same component produce exactly 1 i
 
 ---
 
-### 🔄 Async Batch Worker
+### Async Batch Worker
 
 The worker runs as a **separate containerized process**, consuming from the Redis Stream:
 
 ```
-Read Batch (up to 500 messages)
+Read Batch (up to 2000 messages)
        │
        ├─► Parse: separate MongoDB signals vs Postgres work_items
        │
@@ -117,7 +118,7 @@ Throughput is logged per-batch. The DLQ prevents a single bad batch from blockin
 
 ---
 
-### 📡 Real-Time Streaming (SSE + Redis Pub/Sub)
+### Real-Time Streaming (SSE + Redis Pub/Sub)
 
 The UI **never polls**. Instead:
 
@@ -130,7 +131,16 @@ The UI **never polls**. Instead:
 
 ---
 
-## 🖥️ Frontend Dashboard
+### 🤖 AI-Augmented Incident Resolution
+
+This system leverages **Google Gemini 2.5 Pro** to reduce MTTR (Mean Time To Recovery) through two advanced patterns:
+
+1. **AI Copilot (RAG):** When an incident occurs, the system uses `pg_trgm` (Postgres Trigram Similarity) to search the "Historical Data Lake" for similar past incidents and their resolutions.
+2. **✨ Auto-Generate RCA:** Instead of manual entry, an engineer can click one button to have Gemini analyze the raw MongoDB telemetry logs and generate a structured Root Cause Analysis automatically.
+
+---
+
+###  Frontend Dashboard
 
 Built with **Next.js 15 App Router** using glassmorphic dark-mode design.
 
@@ -178,7 +188,7 @@ http://localhost:3001
 
 ### 3. Run the Chaos Simulation
 
-Either click **🔥 RUN CHAOS SIMULATION** in the UI, or run the Python script directly:
+Either click ** RUN CHAOS SIMULATION** in the UI, or run the Python script directly:
 
 ```bash
 pip3 install requests
