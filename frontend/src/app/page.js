@@ -155,9 +155,10 @@ export default function Dashboard() {
   const [rcaForm, setRcaForm] = useState({ root_cause_category: '', fix_applied: '', prevention_steps: '' });
   const [rcaStatus, setRcaStatus] = useState({ message: '', error: false });
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isGeneratingRca, setIsGeneratingRca] = useState(false);
 
   // MTTR Analytics State
-  const [mttr, setMttr] = useState({ closed_count: 0, avg_mttr_seconds: 0 });
+  const [mttr, setMttr] = useState({ total_count: 0, active_count: 0, closed_count: 0, avg_mttr_seconds: 0 });
   const [droppedSignals, setDroppedSignals] = useState(0);
   const [signalHistory, setSignalHistory] = useState(Array(30).fill(0));
   const [currentRate, setCurrentRate] = useState(0);
@@ -260,6 +261,7 @@ export default function Dashboard() {
     setSimilarIncidents([]);
     setLoadingSimilar(true);
     setRcaStatus({ message: '', error: false });
+    setRcaForm({ root_cause_category: '', fix_applied: '', prevention_steps: '' });
     
     try {
       const res = await fetch(`/api/incidents/${incident.id}/signals`);
@@ -311,9 +313,32 @@ export default function Dashboard() {
       if (!res.ok) throw new Error(data.error);
       
       setRcaStatus({ message: 'RCA Submitted Successfully! You can now Close the incident.', error: false });
-      setRcaForm({ root_cause_category: '', fix_applied: '', prevention_steps: '' });
+      // We don't clear the form right away so they can see what was submitted, but we could.
     } catch (err) {
       setRcaStatus({ message: err.message, error: true });
+    }
+  };
+
+  const autoGenerateRCA = async () => {
+    setIsGeneratingRca(true);
+    setRcaStatus({ message: '✨ Gemini is analyzing telemetry logs...', error: false });
+    try {
+      const res = await fetch(`/api/incidents/${selectedIncident.id}/auto-rca`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to generate RCA');
+      
+      setRcaForm({
+        root_cause_category: data.root_cause_category || '',
+        fix_applied: data.fix_applied || '',
+        prevention_steps: data.prevention_steps || ''
+      });
+      setRcaStatus({ message: 'AI RCA Generated Successfully!', error: false });
+    } catch (err) {
+      setRcaStatus({ message: err.message, error: true });
+    } finally {
+      setIsGeneratingRca(false);
     }
   };
 
@@ -387,13 +412,13 @@ export default function Dashboard() {
               <div className="glass-panel" style={{ padding: '0.5rem 1.25rem', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                   <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>TOTAL INCIDENTS</span>
-                  <span className="monospace" style={{ fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>{incidents.length}</span>
+                  <span className="monospace" style={{ fontSize: '1.2rem', color: '#fff', fontWeight: 600 }}>{mttr.total_count}</span>
                 </div>
                 <div style={{ width: '1px', height: '25px', background: 'var(--border-color)' }} />
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                   <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 800, letterSpacing: '1px' }}>ACTIVE</span>
                   <span className="monospace" style={{ fontSize: '1.2rem', color: 'var(--status-open)', fontWeight: 600 }}>
-                    {incidents.filter(i => i.status === 'OPEN' || i.status === 'INVESTIGATING').length}
+                    {mttr.active_count}
                   </span>
                 </div>
                 <div style={{ width: '1px', height: '25px', background: 'var(--border-color)' }} />
@@ -614,9 +639,31 @@ export default function Dashboard() {
           {/* RCA Form */}
           {selectedIncident.status !== 'CLOSED' && (
             <div style={{ marginBottom: '2rem' }}>
-              <h4 style={{ color: 'var(--text-main)', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
-                Root Cause Analysis (RCA)
-              </h4>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
+                <h4 style={{ color: 'var(--text-main)', margin: 0 }}>
+                  Root Cause Analysis (RCA)
+                </h4>
+                <button 
+                  onClick={autoGenerateRCA}
+                  disabled={isGeneratingRca}
+                  style={{ 
+                    background: 'linear-gradient(45deg, #8b5cf6, #3b82f6)', 
+                    color: '#fff', 
+                    border: 'none', 
+                    padding: '0.4rem 0.8rem', 
+                    borderRadius: '4px', 
+                    fontSize: '0.75rem', 
+                    fontWeight: 600, 
+                    cursor: isGeneratingRca ? 'default' : 'pointer',
+                    opacity: isGeneratingRca ? 0.7 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem'
+                  }}
+                >
+                  {isGeneratingRca ? '✨ ANALYZING LOGS...' : '✨ AUTO-GENERATE RCA'}
+                </button>
+              </div>
               <form onSubmit={submitRCA}>
                 <input 
                   required

@@ -2,6 +2,7 @@ const express = require('express');
 const { Pool } = require('pg');
 const { MongoClient } = require('mongodb');
 const Redis = require('ioredis');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // Import our SRE business logic
 const { processIncomingSignal } = require('./ingestion');
@@ -36,10 +37,10 @@ async function connectDatabases() {
 app.post('/api/v1/signals', async (req, res) => {
   try {
     const signal = req.body;
-    
+
     // 1. Debounce and push to Redis Streams
     await processIncomingSignal(redisClient, pgPool, mongoCollection, signal);
-    
+
     // 2. Dispatch Alerts based on component Strategy
     alertManager.dispatchAlert({
       id: signal.work_item_id || 'pending-uuid',
@@ -75,9 +76,9 @@ app.post('/api/v1/incidents/:id/state', async (req, res) => {
     // 3. Attempt Transition (This handles the transaction and RCA validation for 'CLOSED')
     const updatedState = await incidentState.transitionTo(newState, pgPool);
 
-    res.status(200).json({ 
-      message: 'State transition successful', 
-      newStatus: updatedState.statusName 
+    res.status(200).json({
+      message: 'State transition successful',
+      newStatus: updatedState.statusName
     });
 
   } catch (error) {
@@ -116,6 +117,57 @@ app.post('/api/v1/incidents/:id/rca', async (req, res) => {
 });
 
 /**
+ * POST /api/v1/incidents/:id/auto-rca
+ * Auto-generates Root Cause Analysis using Gemini AI based on raw telemetry.
+ */
+app.post('/api/v1/incidents/:id/auto-rca', async (req, res) => {
+  const { id } = req.params;
+  try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    // 1. Fetch raw signals
+    const signals = await mongoCollection.find({ work_item_id: id })
+      .sort({ timestamp: -1 })
+      .limit(20) // Only send recent 20 to fit in prompt nicely
+      .toArray();
+
+    if (signals.length === 0) {
+      return res.status(400).json({ error: "No raw telemetry found to analyze." });
+    }
+
+    // 2. Initialize Gemini
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-pro" });
+
+    // 3. Build Prompt
+    const prompt = `
+    You are an expert Site Reliability Engineer (SRE).
+    Analyze the following JSON telemetry logs from an ongoing incident and generate a Root Cause Analysis (RCA).
+    
+    Telemetry:
+    ${JSON.stringify(signals.map(s => s.payload), null, 2)}
+    
+    Respond EXACTLY with a raw JSON object (no markdown formatting, no backticks) containing:
+    {
+      "root_cause_category": "Short 2-3 word category (e.g., Database Connection Pool)",
+      "fix_applied": "A brief sentence describing the immediate fix.",
+      "prevention_steps": "A brief sentence describing how to prevent it next time."
+    }
+    `;
+
+    // 4. Call Gemini
+    const result = await model.generateContent(prompt);
+    let text = result.response.text();
+    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    const rca = JSON.parse(text);
+
+    res.status(200).json(rca);
+  } catch (error) {
+    console.error('[Auto-RCA Error]', error);
+    res.status(500).json({ error: 'Failed to generate RCA from AI' });
+  }
+});
+
+/**
  * GET /api/v1/incidents
  * Fetches the active work items to populate the SRE dashboard.
  */
@@ -123,7 +175,7 @@ app.get('/api/v1/incidents', async (req, res) => {
   try {
     // Enable CORS for local development
     res.setHeader('Access-Control-Allow-Origin', '*');
-    
+
     const result = await pgPool.query('SELECT * FROM work_items ORDER BY created_at DESC LIMIT 50');
     res.status(200).json(result.rows);
   } catch (error) {
@@ -140,9 +192,9 @@ app.get('/api/v1/incidents/:id/signals', async (req, res) => {
   try {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const signals = await mongoCollection.find({ work_item_id: req.params.id })
-                                         .sort({ timestamp: -1 })
-                                         .limit(100)
-                                         .toArray();
+      .sort({ timestamp: -1 })
+      .limit(100)
+      .toArray();
     res.status(200).json(signals);
   } catch (error) {
     console.error('[Mongo Fetch Error]', error);
@@ -158,11 +210,11 @@ app.get('/api/v1/incidents/:id/similar', async (req, res) => {
   const { id } = req.params;
   try {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    
+
     // First get the current incident's component
     const current = await pgPool.query('SELECT component_id FROM work_items WHERE id = $1', [id]);
     if (current.rows.length === 0) return res.status(404).json({ error: 'Incident not found' });
-    
+
     const componentId = current.rows[0].component_id;
 
     // Search for CLOSED incidents with similar component_id using trigram similarity
@@ -196,10 +248,11 @@ app.get('/api/v1/analytics/mttr', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const query = `
       SELECT 
-        COUNT(id) as closed_count,
-        COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 0) as avg_mttr_seconds
-      FROM work_items 
-      WHERE status = 'CLOSED';
+        COUNT(*) as total_count,
+        COUNT(*) FILTER (WHERE status IN ('OPEN', 'INVESTIGATING', 'RESOLVED')) as active_count,
+        COUNT(*) FILTER (WHERE status = 'CLOSED') as closed_count,
+        COALESCE(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) FILTER (WHERE status = 'CLOSED'), 0) as avg_mttr_seconds
+      FROM work_items;
     `;
     const result = await pgPool.query(query);
     res.status(200).json(result.rows[0]);
@@ -223,7 +276,7 @@ app.get('/api/v1/stream', (req, res) => {
 
   // Create a dedicated redis subscriber for this client
   const subscriber = new Redis(process.env.REDIS_URL);
-  
+
   subscriber.subscribe('system_updates', (err) => {
     if (err) console.error("Failed to subscribe", err);
   });

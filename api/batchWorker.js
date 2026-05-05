@@ -1,4 +1,4 @@
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 2000;
 const MAX_RETRIES = 3;
 const STREAM_NAME = 'incident_signals';
 const GROUP_NAME = 'ingestion_group';
