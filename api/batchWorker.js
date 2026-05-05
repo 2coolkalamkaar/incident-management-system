@@ -167,6 +167,20 @@ async function processBatch(redisClient, pgPool, mongoCollection, streamData) {
       await redisClient.xack(STREAM_NAME, GROUP_NAME, ...messageIds);
       console.log(`[Worker] ✅ Successfully processed, inserted, and ACKed batch of ${messageIds.length} messages.`);
       redisClient.publish('system_updates', JSON.stringify({ type: 'REFRESH_INCIDENTS' })).catch(err => console.error(err));
+
+      // Log CREATED timeline events for each new work item
+      const workItems = Array.from(workItemsMap.values());
+      for (const item of workItems) {
+        try {
+          await pgPool.query(
+            'INSERT INTO incident_timeline (work_item_id, event_type, description, metadata) VALUES ($1, $2, $3, $4)',
+            [item.id, 'CREATED', `⚡ Incident created (${rawSignals.filter(s => s.work_item_id === item.id).length} signals detected)`, 
+             JSON.stringify({ component_id: item.component_id, severity: item.severity, batch_size: messageIds.length })]
+          );
+        } catch (err) {
+          // Silently ignore if the work item already existed (ON CONFLICT DO NOTHING means it wasn't a new insert)
+        }
+      }
     }
 
   } catch (error) {

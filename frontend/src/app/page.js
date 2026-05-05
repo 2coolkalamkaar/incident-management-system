@@ -150,6 +150,7 @@ export default function Dashboard() {
   const [loadingSignals, setLoadingSignals] = useState(false);
   const [similarIncidents, setSimilarIncidents] = useState([]);
   const [loadingSimilar, setLoadingSimilar] = useState(false);
+  const [timeline, setTimeline] = useState([]);
 
   // RCA Form State
   const [rcaForm, setRcaForm] = useState({ root_cause_category: '', fix_applied: '', prevention_steps: '' });
@@ -262,6 +263,7 @@ export default function Dashboard() {
     setLoadingSimilar(true);
     setRcaStatus({ message: '', error: false });
     setRcaForm({ root_cause_category: '', fix_applied: '', prevention_steps: '' });
+    setTimeline([]);
     
     try {
       const res = await fetch(`/api/incidents/${incident.id}/signals`);
@@ -274,6 +276,12 @@ export default function Dashboard() {
       if (simRes.ok) {
         const simData = await simRes.json();
         setSimilarIncidents(simData);
+      }
+
+      const tlRes = await fetch(`/api/incidents/${incident.id}/timeline`);
+      if (tlRes.ok) {
+        const tlData = await tlRes.json();
+        setTimeline(tlData);
       }
     } catch (err) {
       console.error("Failed to fetch incident details", err);
@@ -296,6 +304,10 @@ export default function Dashboard() {
       setRcaStatus({ message: `Success: State transitioned to ${newState}`, error: false });
       fetchIncidents(); // Refresh UI
       fetchMttr(); // Refresh Analytics if closed
+
+      // Refresh timeline after state change
+      const tlRes = await fetch(`/api/incidents/${selectedIncident.id}/timeline`);
+      if (tlRes.ok) setTimeline(await tlRes.json());
     } catch (err) {
       setRcaStatus({ message: err.message, error: true });
     }
@@ -313,7 +325,9 @@ export default function Dashboard() {
       if (!res.ok) throw new Error(data.error);
       
       setRcaStatus({ message: 'RCA Submitted Successfully! You can now Close the incident.', error: false });
-      // We don't clear the form right away so they can see what was submitted, but we could.
+      // Refresh timeline after RCA submission
+      const tlRes = await fetch(`/api/incidents/${selectedIncident.id}/timeline`);
+      if (tlRes.ok) setTimeline(await tlRes.json());
     } catch (err) {
       setRcaStatus({ message: err.message, error: true });
     }
@@ -335,6 +349,9 @@ export default function Dashboard() {
         prevention_steps: data.prevention_steps || ''
       });
       setRcaStatus({ message: 'AI RCA Generated Successfully!', error: false });
+      // Refresh timeline after AI RCA generation
+      const tlRes = await fetch(`/api/incidents/${selectedIncident.id}/timeline`);
+      if (tlRes.ok) setTimeline(await tlRes.json());
     } catch (err) {
       setRcaStatus({ message: err.message, error: true });
     } finally {
@@ -607,6 +624,54 @@ export default function Dashboard() {
               </button>
             </div>
           </div>
+
+          {/* Incident Timeline */}
+          {timeline.length > 0 && (
+            <div style={{ marginBottom: '2rem' }}>
+              <h4 style={{ color: 'var(--text-main)', marginBottom: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
+                Incident Timeline
+              </h4>
+              <div style={{ position: 'relative', paddingLeft: '1.5rem' }}>
+                {/* Vertical line */}
+                <div style={{ position: 'absolute', left: '0.45rem', top: '0.5rem', bottom: '0.5rem', width: '2px', background: 'linear-gradient(to bottom, #3b82f6, #8b5cf6, #10b981)' }} />
+                {timeline.map((event, i) => {
+                  const eventColors = {
+                    CREATED: '#3b82f6',
+                    STATE_CHANGE: '#f59e0b',
+                    AI_RCA_GENERATED: '#8b5cf6',
+                    RCA_SUBMITTED: '#10b981',
+                    AI_RAG_MATCH: '#06b6d4'
+                  };
+                  const dotColor = eventColors[event.event_type] || '#6b7280';
+                  return (
+                    <div key={event.id || i} style={{ position: 'relative', marginBottom: i < timeline.length - 1 ? '1rem' : 0, paddingLeft: '1.25rem' }}>
+                      {/* Dot */}
+                      <div style={{ 
+                        position: 'absolute', left: '-1.15rem', top: '0.35rem', 
+                        width: '10px', height: '10px', borderRadius: '50%', 
+                        backgroundColor: dotColor, 
+                        boxShadow: `0 0 8px ${dotColor}80`
+                      }} />
+                      <div style={{ 
+                        padding: '0.75rem 1rem', 
+                        background: 'rgba(0,0,0,0.3)', 
+                        borderRadius: '6px', 
+                        border: '1px solid var(--border-color)' 
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                          <span style={{ fontSize: '0.9rem', color: 'var(--text-main)' }}>{event.description}</span>
+                          <span className="monospace" style={{ fontSize: '0.7rem', color: 'var(--text-muted)', flexShrink: 0, marginLeft: '1rem' }}>
+                            {new Date(event.created_at).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.65rem', color: dotColor, fontWeight: 700, letterSpacing: '0.5px' }}>{event.event_type}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Distributed Trace Dependency Map */}
           <DependencyMap targetComponent={selectedIncident.component_id} />

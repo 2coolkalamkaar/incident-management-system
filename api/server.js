@@ -23,7 +23,33 @@ async function connectDatabases() {
   await mongoClient.connect();
   mongoCollection = mongoClient.db().collection('raw_signals');
   await pgPool.query('CREATE EXTENSION IF NOT EXISTS pg_trgm;');
+  // Create timeline table if it doesn't exist (idempotent)
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS incident_timeline (
+      id SERIAL PRIMARY KEY,
+      work_item_id UUID NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+      event_type VARCHAR(50) NOT NULL,
+      description TEXT NOT NULL,
+      metadata JSONB DEFAULT '{}',
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `);
+  await pgPool.query('CREATE INDEX IF NOT EXISTS idx_timeline_work_item ON incident_timeline(work_item_id);');
   console.log('[Server] 🔌 Successfully connected to PostgreSQL, MongoDB, and Redis.');
+}
+
+/**
+ * Helper: Insert a timeline event for an incident.
+ */
+async function logTimelineEvent(workItemId, eventType, description, metadata = {}) {
+  try {
+    await pgPool.query(
+      'INSERT INTO incident_timeline (work_item_id, event_type, description, metadata) VALUES ($1, $2, $3, $4)',
+      [workItemId, eventType, description, JSON.stringify(metadata)]
+    );
+  } catch (err) {
+    console.warn('[Timeline] Failed to log event:', err.message);
+  }
 }
 
 // ==========================================
@@ -76,6 +102,13 @@ app.post('/api/v1/incidents/:id/state', async (req, res) => {
     // 3. Attempt Transition (This handles the transaction and RCA validation for 'CLOSED')
     const updatedState = await incidentState.transitionTo(newState, pgPool);
 
+    // 4. Log to Incident Timeline
+    const icons = { INVESTIGATING: '🔍', RESOLVED: '✅', CLOSED: '🔒' };
+    await logTimelineEvent(id, 'STATE_CHANGE', 
+      `${icons[newState] || '🔄'} State changed from ${currentStatus} to ${newState}`,
+      { from: currentStatus, to: newState }
+    );
+
     res.status(200).json({
       message: 'State transition successful',
       newStatus: updatedState.statusName
@@ -106,6 +139,13 @@ app.post('/api/v1/incidents/:id/rca', async (req, res) => {
       RETURNING *;
     `;
     const result = await pgPool.query(query, [id, root_cause_category, fix_applied, prevention_steps]);
+
+    // Log to Incident Timeline
+    await logTimelineEvent(id, 'RCA_SUBMITTED', 
+      `📝 Root Cause Analysis submitted: "${root_cause_category}"`,
+      { root_cause_category, fix_applied }
+    );
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     if (error.code === '23505') { // Postgres unique violation code
@@ -160,10 +200,34 @@ app.post('/api/v1/incidents/:id/auto-rca', async (req, res) => {
     text = text.replace(/```json/g, '').replace(/```/g, '').trim();
     const rca = JSON.parse(text);
 
+    // Log to Incident Timeline
+    await logTimelineEvent(id, 'AI_RCA_GENERATED', 
+      `✨ AI Generated RCA via Gemini 2.5 Pro: "${rca.root_cause_category}"`,
+      { model: 'gemini-2.5-pro', root_cause_category: rca.root_cause_category }
+    );
+
     res.status(200).json(rca);
   } catch (error) {
     console.error('[Auto-RCA Error]', error);
     res.status(500).json({ error: 'Failed to generate RCA from AI' });
+  }
+});
+
+/**
+ * GET /api/v1/incidents/:id/timeline
+ * Fetches the chronological audit log for an incident.
+ */
+app.get('/api/v1/incidents/:id/timeline', async (req, res) => {
+  try {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const result = await pgPool.query(
+      'SELECT * FROM incident_timeline WHERE work_item_id = $1 ORDER BY created_at ASC',
+      [req.params.id]
+    );
+    res.status(200).json(result.rows);
+  } catch (error) {
+    console.error('[Timeline Fetch Error]', error);
+    res.status(500).json({ error: 'Failed to fetch timeline' });
   }
 });
 

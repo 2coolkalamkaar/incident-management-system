@@ -63,6 +63,7 @@
 | MTTR Analytics | SQL `EXTRACT(EPOCH …)` aggregation | Time-Series Analytics |
 | AI Incident Resolution | Postgres `pg_trgm` | RAG (Retrieval-Augmented Gen) |
 | LLM RCA Generation | Google Gemini 2.5 Pro | AI-Agent Analysis |
+| Incident Audit Timeline | PostgreSQL + JSONB metadata | Event Sourcing |
 
 ---
 
@@ -131,12 +132,22 @@ The UI **never polls**. Instead:
 
 ---
 
-### 🤖 AI-Augmented Incident Resolution
+### AI-Augmented Incident Resolution
 
 This system leverages **Google Gemini 2.5 Pro** to reduce MTTR (Mean Time To Recovery) through two advanced patterns:
 
 1. **AI Copilot (RAG):** When an incident occurs, the system uses `pg_trgm` (Postgres Trigram Similarity) to search the "Historical Data Lake" for similar past incidents and their resolutions.
-2. **✨ Auto-Generate RCA:** Instead of manual entry, an engineer can click one button to have Gemini analyze the raw MongoDB telemetry logs and generate a structured Root Cause Analysis automatically.
+2. **Auto-Generate RCA:** Instead of manual entry, an engineer can click one button to have Gemini analyze the raw MongoDB telemetry logs and generate a structured Root Cause Analysis automatically.
+3. **Incident Timeline (Audit Log):** Every lifecycle action is persisted to a chronological audit trail with JSONB metadata, enabling full post-mortem forensics.
+
+```
+⚡ Incident created (42 signals detected)                    14:01:23
+🔍 State changed from OPEN to INVESTIGATING                 14:03:11
+✨ AI Generated RCA via Gemini 2.5 Pro: "Connection Pool"    14:05:44
+📝 Root Cause Analysis submitted: "Database Exhaustion"      14:06:02
+✅ State changed from INVESTIGATING to RESOLVED              14:06:15
+🔒 State changed from RESOLVED to CLOSED                    14:06:28
+```
 
 ---
 
@@ -151,6 +162,7 @@ Built with **Next.js 15 App Router** using glassmorphic dark-mode design.
 | **Incident Grid** | Cards color-coded by severity (P0 → P3) with pulsing P0 animation |
 | **Distributed Trace Map** | Visual node graph showing upstream service blast radius |
 | **AI Copilot (RAG)** | Instantly surfaces historical fixes from similar past incidents |
+| **Incident Timeline** | Chronological audit log of every lifecycle event with glowing dots and timestamps |
 | **Lifecycle Action Bar** | One-click state transitions enforced by the backend State Machine |
 | **RCA Form** | Inline Root Cause Analysis submission — required before incident closure |
 | **Raw Telemetry Pane** | Full MongoDB signal payloads rendered as a log stream |
@@ -246,6 +258,7 @@ CREATE TABLE rca_records (
 | `GET` | `/api/v1/incidents` | List all work items from PostgreSQL |
 | `GET` | `/api/v1/incidents/:id/signals` | Fetch raw MongoDB logs for an incident |
 | `GET` | `/api/v1/incidents/:id/similar` | **RAG:** Search historical RCA records using trigram similarity |
+| `GET` | `/api/v1/incidents/:id/timeline` | Fetch chronological audit log for an incident |
 | `POST` | `/api/v1/incidents/:id/state` | Trigger a state machine transition |
 | `POST` | `/api/v1/incidents/:id/rca` | Submit a Root Cause Analysis record |
 | `GET` | `/api/v1/analytics/mttr` | Get MTTR analytics aggregation |
@@ -261,6 +274,7 @@ Frontend     Next.js 15 (App Router), React 18
 Databases    PostgreSQL 15, MongoDB 6, Redis 7
 Messaging    Redis Streams (queue), Redis Pub/Sub (real-time events)
 AI Search    PostgreSQL pg_trgm (mocking vector similarity)
+AI LLM       Google Gemini 2.5 Pro (RCA generation)
 Containers   Docker, Docker Compose
 Chaos Test   Python 3, concurrent.futures
 ```
@@ -277,6 +291,7 @@ Chaos Test   Python 3, concurrent.futures
 - **Dead Letter Queue** — Failed batches are routed to `incident_signals_dlq` after 3 exponential backoff retries.
 - **BFF (Backend For Frontend)** — Next.js API routes act as a proxy layer, solving internal Docker DNS resolution and eliminating CORS issues.
 - **Push Architecture** — Redis Pub/Sub + Server-Sent Events replaces polling for sub-second UI latency.
+- **Event Sourcing (Audit Log)** — Every incident lifecycle action is persisted to an `incident_timeline` table with JSONB metadata, enabling full post-mortem forensics.
 
 ---
 
