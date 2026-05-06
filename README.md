@@ -1,7 +1,5 @@
 #  Incident Management Command Center (IMC)
 
-> A production-grade, real-time Site Reliability Engineering (SRE) platform built with a polyglot persistence strategy, event-driven architecture, and enterprise design patterns.
-
 ##  System Architecture
 
 ```
