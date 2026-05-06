@@ -53,8 +53,35 @@ async function logTimelineEvent(workItemId, eventType, description, metadata = {
 }
 
 // ==========================================
+// OBSERVABILITY & METRICS
+// ==========================================
+let signalCount = 0;
+
+setInterval(() => {
+  const throughput = (signalCount / 5).toFixed(1);
+  if (signalCount > 0) {
+    console.log(`[Metrics] Throughput: ${throughput} signals/sec`);
+  }
+  signalCount = 0;
+}, 5000);
+
+// ==========================================
 // ROUTES
 // ==========================================
+
+/**
+ * GET /health
+ * Basic health check endpoint for Kubernetes/Docker orchestrators.
+ */
+app.get('/health', async (req, res) => {
+  try {
+    // Simple check: can we query the DB?
+    await pgPool.query('SELECT 1');
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  } catch (error) {
+    res.status(503).json({ status: 'error', details: 'Database connection failed' });
+  }
+});
 
 /**
  * POST /api/v1/signals
@@ -62,6 +89,7 @@ async function logTimelineEvent(workItemId, eventType, description, metadata = {
  */
 app.post('/api/v1/signals', async (req, res) => {
   try {
+    signalCount++;
     const signal = req.body;
 
     // 1. Debounce and push to Redis Streams
