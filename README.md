@@ -1,4 +1,4 @@
-#  Incident Management Command Center (IMC)
+#  Incident Management System(IMS)
 
 ##  System Architecture
 
