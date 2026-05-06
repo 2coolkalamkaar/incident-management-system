@@ -47,24 +47,6 @@
 
 ## Key Features
 
-### 🔥 Core Engineering Highlights
-
-| Feature | Technology | Design Pattern |
-|---|---|---|
-| Signal Ingestion & Debouncing | Redis `SET NX` + TTL | Circuit Breaker |
-| Bulk DB Writes | MongoDB `insertMany` + PG `ON CONFLICT` | Idempotency |
-| Unrecoverable Failures | Redis Stream DLQ | Dead Letter Queue |
-| Incident Lifecycle | Class-based State Machine | State Design Pattern |
-| Alert Routing | P0 (PagerDuty sim) / P2 (Slack sim) | Strategy Design Pattern |
-| Non-blocking Alerts | `setImmediate()` async dispatch | Fire-and-Forget |
-| Real-Time UI Updates | Server-Sent Events (SSE) + Redis Pub/Sub | Push Architecture |
-| MTTR Analytics | SQL `EXTRACT(EPOCH …)` aggregation | Time-Series Analytics |
-| AI Incident Resolution | Postgres `pg_trgm` | RAG (Retrieval-Augmented Gen) |
-| LLM RCA Generation | Google Gemini 2.5 Pro | AI-Agent Analysis |
-| Incident Audit Timeline | PostgreSQL + JSONB metadata | Event Sourcing |
-
----
-
 ### Incident Lifecycle (State Machine)
 
 Strict transition rules are enforced server-side:
@@ -139,12 +121,12 @@ This system leverages **Google Gemini 2.5 Pro** to reduce MTTR (Mean Time To Rec
 3. **Incident Timeline (Audit Log):** Every lifecycle action is persisted to a chronological audit trail with JSONB metadata, enabling full post-mortem forensics.
 
 ```
-⚡ Incident created (42 signals detected)                    14:01:23
-🔍 State changed from OPEN to INVESTIGATING                 14:03:11
-✨ AI Generated RCA via Gemini 2.5 Pro: "Connection Pool"    14:05:44
-📝 Root Cause Analysis submitted: "Database Exhaustion"      14:06:02
-✅ State changed from INVESTIGATING to RESOLVED              14:06:15
-🔒 State changed from RESOLVED to CLOSED                    14:06:28
+Incident created (42 signals detected)                    14:01:23
+State changed from OPEN to INVESTIGATING                 14:03:11
+AI Generated RCA via Gemini 2.5 Pro: "Connection Pool"    14:05:44
+Root Cause Analysis submitted: "Database Exhaustion"      14:06:02
+State changed from INVESTIGATING to RESOLVED              14:06:15
+State changed from RESOLVED to CLOSED                    14:06:28
 ```
 
 ---
@@ -168,7 +150,7 @@ Built with **Next.js 15 App Router** using glassmorphic dark-mode design.
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Docker & Docker Compose
@@ -209,7 +191,7 @@ This fires **150 concurrent HTTP requests** (100 RDBMS failures + 50 MCP failure
 
 ---
 
-## 🗄️ Database Schema
+##  Database Schema
 
 ### PostgreSQL — `work_items`
 ```sql
@@ -264,7 +246,7 @@ CREATE TABLE rca_records (
 
 ---
 
-## 🧰 Tech Stack
+##  Tech Stack
 
 ```
 Backend      Node.js 18, Express.js
@@ -279,7 +261,7 @@ Chaos Test   Python 3, concurrent.futures
 
 ---
 
-## 🏛️ Design Patterns Used
+##  Design Patterns Used
 
 - **RAG (Retrieval-Augmented Generation)** — Uses Postgres `pg_trgm` text similarity to query past RCA records and suggest fixes for active incidents based on component signatures.
 - **State Pattern** — `OpenState`, `InvestigatingState`, `ResolvedState`, `ClosedState` classes with strict transition enforcement and transactional RCA validation.
@@ -293,7 +275,7 @@ Chaos Test   Python 3, concurrent.futures
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 IMC/
